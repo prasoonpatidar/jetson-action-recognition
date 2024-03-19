@@ -216,3 +216,48 @@ def pose_inference_server(keypoints, keypoints_score, posec3d_model, posec3d_lab
     # pose_queue.put(pose_activity_name)
     pose_inf_time = f'{round(inf_time,1)}secs'
     return pose_inf_time+'\n\n'+pose_activity_name
+
+
+def pose_inference_iphone(instance_pose_data, posec3d_model, posec3d_label_map, logger, orig_h=1, orig_w=1, short_side=480):
+    w, h = mmcv.rescale_size((orig_w, orig_h), (short_side, np.Inf))
+    logger.info(f"Expected width height, {w}{h}")
+    # if pose_queue.qsize() <= 0.:
+    #     return "No Pose Info"
+    # instance_pose_data = np.array([pose_queue.get() for _ in range(pose_queue.size())][::-1])
+    num_frame = len(instance_pose_data)
+    logger.info(f"Got {num_frame} frames")
+    fake_anno = dict(
+        frame_dir='',
+        label=-1,
+        img_shape=(h, w),
+        original_shape=(h, w),
+        start_index=0,
+        modality='Pose',
+        total_frames=num_frame)
+    num_keypoint = 17
+    num_person = 1
+    keypoint = np.zeros((num_person, num_frame, num_keypoint, 2),
+                        dtype=np.float16)
+    keypoint_score = np.zeros((num_person, num_frame, num_keypoint),
+                              dtype=np.float16)
+    for i, pose_data in enumerate(instance_pose_data):
+        keypoint[0, i] = pose_data[:,:2]
+        # logger.info(f"Created keypoint info")
+        keypoint_score[0, i] = pose_data[:, 2]
+    logger.info(f"Created all keypoint info")
+    fake_anno['keypoint'] = keypoint
+    fake_anno['keypoint_score'] = keypoint_score
+    start_time = time.time()
+    results = inference_recognizer(posec3d_model, fake_anno)
+    inf_time = time.time()-start_time
+    # del fake_anno, keypoint, keypoint_score
+    df_scores = pd.DataFrame([(posec3d_label_map[xr[0]], float(xr[1])) for xr in results], columns=['label', 'score'])
+    df_scores = df_scores.sort_values(by=['score'],ascending=False).iloc[:5]
+    # logger.info(f"Got results from model {df_scores.values.tolist()}")
+    return df_scores.values.tolist()
+
+    # pose_activity_name = '\n'.join([f'{kv}-{pose_activity_name[kv]}' for kv in pose_activity_name])
+    # # pose_queue.put(pose_activity_name)
+    # pose_inf_time = f'{round(inf_time,1)}secs'
+    # return pose_inf_time+'\n\n'+pose_activity_name
+

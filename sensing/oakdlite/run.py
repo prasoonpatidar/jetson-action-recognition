@@ -71,11 +71,11 @@ def create_pose_pipeline():
     # stereo = pipeline.create(dai.node.StereoDepth)
     pose = pipeline.createNeuralNetwork()
 
-    # rgbOut = pipeline.create(dai.node.XLinkOut)
+    rgbOut = pipeline.create(dai.node.XLinkOut)
     # disparityOut = pipeline.create(dai.node.XLinkOut)
 
-    # rgbOut.setStreamName("rgb")
-    # queueNames.append("rgb")
+    rgbOut.setStreamName("rgb")
+    queueNames.append("rgb")
     # disparityOut.setStreamName("disp")
     # queueNames.append("disp")
 
@@ -110,7 +110,7 @@ def create_pose_pipeline():
     # stereo.setDepthAlign(dai.CameraBoardSocket.RGB)
 
     # Linking
-    # camRgb.isp.link(rgbOut.input)
+    camRgb.isp.link(rgbOut.input)
     # left.out.link(stereo.left)
     # right.out.link(stereo.right)
     # stereo.disparity.link(disparityOut.input)

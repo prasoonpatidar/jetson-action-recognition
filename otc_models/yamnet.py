@@ -49,8 +49,8 @@ def audio_inference(instance_audio_data, yamnet, yamnet_classes, audio_queue=Non
     scores, embeddings, spectrogram = yamnet(waveform)
     df_scores = pd.DataFrame(scores.numpy().T, index=yamnet_classes)
     if audio_queue is not None:
-        audio_activity_name = aggregate_ts_scores(df_scores)[1].sort_values(ascending=False).round(3).iloc[:4].to_dict()
-        audio_activity_name = '|'.join([f'{kv}-{audio_activity_name[kv]}' for kv in audio_activity_name])
+        audio_activity_name = aggregate_ts_scores(df_scores)[1].sort_values(ascending=False).round(3).iloc[:5].to_dict()
+        audio_activity_name = '\n'.join([f'{kv}-{audio_activity_name[kv]}' for kv in audio_activity_name])
         audio_queue.put(audio_activity_name)
         return None
 

@@ -1,0 +1,8 @@
+[Desktop Entry]
+Version=1.0
+Name=VAX_AV
+Exec="/home/synergy/audio-pose-action-recognition/action_recognition.sh"
+Icon=/home/synergy/audio-pose-action-recognition/vax_av_pipeline.png
+Terminal=true
+Type=Application
+Categories=Application;

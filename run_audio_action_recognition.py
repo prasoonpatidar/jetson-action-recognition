@@ -35,7 +35,7 @@ from sensing.audio.run_audio import ReaderThread as audioReaderThread, Device as
 from otc_models import get_model
 from otc_models.yamnet import audio_inference
 from otc_models.posec3d import pose_inference
-from util import aggregate_ts_scores
+from util import aggregate_ts_scores, add_text_to_image
 
 CHECKPOINT_FREQ = 60
 
@@ -46,7 +46,6 @@ def sigterm_handler(_signo, _stack_frame):
 
 
 signal.signal(signal.SIGTERM, sigterm_handler)
-
 
 if __name__ == '__main__':
 
@@ -81,7 +80,7 @@ if __name__ == '__main__':
     else:
         print("Audio sensor not available, exiting...")
     # audio_frames = np.zeros((100, audioSensor.num_channels))
-    audio_frames = np.zeros((100,1))
+    audio_frames = np.zeros((100, 1))
     audio_window_name = 'Audio FFt'
     screen_width, screen_height = get_screen_size()
     cv2.namedWindow(audio_window_name)
@@ -126,8 +125,15 @@ if __name__ == '__main__':
                 S_fft = np.abs(librosa.stft(y=audio_frames.T, n_fft=256))
                 S_dB = librosa.amplitude_to_db(S_fft, ref=np.min).mean(axis=0)
                 img_col = cv2.applyColorMap(S_dB.astype(np.uint8), cv2.COLORMAP_JET)
-                img_col = cv2.putText(img_col, audio_activity, (0, img_col.shape[0] // 2), cv2.FONT_HERSHEY_SIMPLEX,
-                                      0.5, (0, 0, 0), 1, cv2.LINE_AA)
+                img_col = add_text_to_image(img_col,
+                                            audio_activity,
+                                            bg_color_rgb=(255, 255, 255),
+                                            font_color_rgb=(255, 0, 0),
+                                            top_left_xy=(0, 0),
+                                            font_scale=0.5,
+                                            )
+                # img_col = cv2.putText(img_col, audio_activity, (0, img_col.shape[0] // 2), cv2.FONT_HERSHEY_SIMPLEX,
+                #                       0.5, (0, 0, 0), 1, cv2.LINE_AA)
 
                 cv2.imshow(audio_window_name, img_col)
                 # if cv2.waitKey(1) == 27:

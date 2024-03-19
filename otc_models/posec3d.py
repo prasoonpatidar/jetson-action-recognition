@@ -1,5 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import argparse
+import base64
 import os
 import os.path as osp
 import shutil
@@ -18,9 +19,11 @@ from pathlib import Path
 import pandas as pd
 import torch
 from mmcv.parallel.collate import collate
-
+import requests
+import json
 from mmaction.core import OutputHook
 from mmaction.datasets.pipelines import Compose
+
 
 # poseNet_skeleton_connections = [[0, 1], [1, 3], [0, 2], [2, 4], [5, 6], [5, 7], [7, 9],
 #                    [6, 8], [8, 10], [5, 11], [6, 12], [11, 12], [11, 13],
@@ -44,6 +47,7 @@ def posec3d_ntu120_model(device='cpu'):
     label_map = [x.strip() for x in open(class_names_file).readlines()]
     return posec3d_model, label_map
 
+
 def posec3d_ntu60_model(device='cpu'):
     model_config_file = f'{Path(__file__).parent}/model_configs/skeleton/posec3d/slowonly_r50_u48_240e_ntu60_xsub_keypoint.py'
     model_ckpt_file = f'{Path(__file__).parent}/model_ckpts/slowonly_r50_u48_240e_ntu60_xsub_keypoint-f3adabf1.pth'
@@ -54,6 +58,7 @@ def posec3d_ntu60_model(device='cpu'):
     posec3d_model = init_recognizer(config, model_ckpt_file, device)
     label_map = [x.strip() for x in open(class_names_file).readlines()]
     return posec3d_model, label_map
+
 
 def posec3d_hmdb_model(device='cpu'):
     model_config_file = f'{Path(__file__).parent}/model_configs/skeleton/posec3d/slowonly_kinetics400_pretrained_r50_u48_120e_hmdb51_split1_keypoint.py'
@@ -66,6 +71,7 @@ def posec3d_hmdb_model(device='cpu'):
     label_map = [x.strip() for x in open(class_names_file).readlines()]
     return posec3d_model, label_map
 
+
 def posec3d_ucf_model(device='cpu'):
     model_config_file = f'{Path(__file__).parent}/model_configs/skeleton/posec3d/slowonly_kinetics400_pretrained_r50_u48_120e_ucf101_split1_keypoint.py'
     model_ckpt_file = f'{Path(__file__).parent}/model_ckpts/slowonly_kinetics400_pretrained_r50_u48_120e_ucf101_split1_keypoint-cae8aa4a.pth'
@@ -76,6 +82,7 @@ def posec3d_ucf_model(device='cpu'):
     posec3d_model = init_recognizer(config, model_ckpt_file, device)
     label_map = [x.strip() for x in open(class_names_file).readlines()]
     return posec3d_model, label_map
+
 
 def stgcn_ntu60_model(device='cpu'):
     model_config_file = f'{Path(__file__).parent}/model_configs/skeleton/stgcn/stgcn_80e_ntu60_xsub_keypoint.py'
@@ -89,13 +96,14 @@ def stgcn_ntu60_model(device='cpu'):
     return stgcn_model, label_map
 
 
-def pose_inference(instance_pose_data, posec3d_model, posec3d_label_map, test_pipeline,pose_queue=None, orig_h=256, orig_w=456, short_side=480):
+def pose_inference(instance_pose_data, posec3d_model, posec3d_label_map, test_pipeline, pose_queue=None, orig_h=256,
+                   orig_w=456, short_side=480):
     w, h = mmcv.rescale_size((orig_w, orig_h), (short_side, np.Inf))
     openPose_to_poseNet = np.array([0, 15, 14, 17, 16, 5, 2, 6, 3, 7, 4, 11, 8, 12, 9, 13, 10])
     # pose_data_shapes = np.array([xr[1].shape[0] for xr in instance_pose_data])
     # instance_pose_data = np.array(instance_pose_data,dtype=object)[pose_data_shapes > 0]
     num_frame = len(instance_pose_data)
-    if num_frame==0:
+    if num_frame == 0:
         if pose_queue is not None:
             pose_queue.put('No Pose Info')
             return None
@@ -109,15 +117,15 @@ def pose_inference(instance_pose_data, posec3d_model, posec3d_label_map, test_pi
         modality='Pose',
         total_frames=num_frame)
     # num_person = max([len(x) for x in instance_pose_data])
-    num_person = 1 #todo: fixed for time being, but need to be dynamic
+    num_person = 1  # todo: fixed for time being, but need to be dynamic
     num_keypoint = 17
     keypoint = np.zeros((num_person, num_frame, num_keypoint, 2),
                         dtype=np.float16)
     keypoint_score = np.zeros((num_person, num_frame, num_keypoint),
                               dtype=np.float16)
-    for i, (ts,pose_data) in enumerate(instance_pose_data):
-        keypoint[0, i]  = pose_data[0,openPose_to_poseNet,:2]
-        keypoint_score[0, i] = pose_data[0,openPose_to_poseNet, 2]
+    for i, (ts, pose_data) in enumerate(instance_pose_data):
+        keypoint[0, i] = pose_data[0, openPose_to_poseNet, :2]
+        keypoint_score[0, i] = pose_data[0, openPose_to_poseNet, 2]
 
     fake_anno['keypoint'] = keypoint
     fake_anno['keypoint_score'] = keypoint_score
@@ -127,31 +135,33 @@ def pose_inference(instance_pose_data, posec3d_model, posec3d_label_map, test_pi
     with torch.no_grad():
         scores = posec3d_model(return_loss=False, **data)[0]
 
-    inf_time = time.time()-start_time
+    inf_time = time.time() - start_time
     num_classes = scores.shape[-1]
     score_tuples = tuple(zip(range(num_classes), scores))
     score_sorted = sorted(score_tuples, key=itemgetter(1), reverse=True)
     results = score_sorted[:5]
     # results = inference_recognizer(posec3d_model, fake_anno)
     # del fake_anno, keypoint, keypoint_score
-    df_scores = pd.DataFrame([(posec3d_label_map[xr[0]], float(xr[1])) for xr in results], columns=['label', 0]).set_index(
+    df_scores = pd.DataFrame([(posec3d_label_map[xr[0]], float(xr[1])) for xr in results],
+                             columns=['label', 0]).set_index(
         'label')
     if pose_queue is not None:
         pose_activity_name = df_scores[0].sort_values(ascending=False).round(3).iloc[:3].to_dict()
         pose_activity_name = '|'.join([f'{kv}-{pose_activity_name[kv]}' for kv in pose_activity_name])
         # pose_queue.put(pose_activity_name)
-        pose_queue.put(str(round(inf_time,3)))
+        pose_queue.put(str(round(inf_time, 3)))
         return None
     return df_scores
 
 
-def pose_inference_v2(instance_pose_data, posec3d_model, posec3d_label_map, test_pipeline, pose_queue=None, orig_h=256, orig_w=456, short_side=480):
+def pose_inference_v2(instance_pose_data, posec3d_model, posec3d_label_map, test_pipeline, pose_queue=None, orig_h=256,
+                      orig_w=456, short_side=480):
     w, h = mmcv.rescale_size((orig_w, orig_h), (short_side, np.Inf))
     openPose_to_poseNet = np.array([0, 15, 14, 17, 16, 5, 2, 6, 3, 7, 4, 11, 8, 12, 9, 13, 10])
     # pose_data_shapes = np.array([xr[1].shape[0] for xr in instance_pose_data])
     # instance_pose_data = np.array(instance_pose_data,dtype=object)[pose_data_shapes > 0]
     num_frame = len(instance_pose_data)
-    if num_frame==0:
+    if num_frame == 0:
         if pose_queue is not None:
             pose_queue.put('No Pose Info')
             return None
@@ -165,32 +175,70 @@ def pose_inference_v2(instance_pose_data, posec3d_model, posec3d_label_map, test
         modality='Pose',
         total_frames=num_frame)
     # num_person = max([len(x) for x in instance_pose_data])
-    num_person = 1 #todo: fixed for time being, but need to be dynamic
+    num_person = 1  # todo: fixed for time being, but need to be dynamic
     num_keypoint = 17
     keypoint = np.zeros((num_person, num_frame, num_keypoint, 2),
                         dtype=np.float16)
     keypoint_score = np.zeros((num_person, num_frame, num_keypoint),
                               dtype=np.float16)
-    for i, (ts,pose_data) in enumerate(instance_pose_data):
-        keypoint[0, i]  = pose_data[0,openPose_to_poseNet,:2]
-        keypoint_score[0, i] = pose_data[0,openPose_to_poseNet, 2]
+    for i, (ts, pose_data) in enumerate(instance_pose_data):
+        keypoint[0, i] = pose_data[0, openPose_to_poseNet, :2]
+        keypoint_score[0, i] = pose_data[0, openPose_to_poseNet, 2]
 
     fake_anno['keypoint'] = keypoint
     fake_anno['keypoint_score'] = keypoint_score
     start_time = time.time()
     results = inference_recognizer(posec3d_model, fake_anno)
-    inf_time = time.time()-start_time
+    inf_time = time.time() - start_time
     # del fake_anno, keypoint, keypoint_score
-    df_scores = pd.DataFrame([(posec3d_label_map[xr[0]], float(xr[1])) for xr in results], columns=['label', 0]).set_index(
+    df_scores = pd.DataFrame([(posec3d_label_map[xr[0]], float(xr[1])) for xr in results],
+                             columns=['label', 0]).set_index(
         'label')
     if pose_queue is not None:
         pose_activity_name = df_scores[0].sort_values(ascending=False).round(3).iloc[:3].to_dict()
         pose_activity_name = '|'.join([f'{kv}-{pose_activity_name[kv]}' for kv in pose_activity_name])
         # pose_queue.put(pose_activity_name)
-        pose_queue.put(str(round(inf_time,3)))
+        pose_queue.put(str(round(inf_time, 3)))
         return None
     return df_scores
 
+
+def pose_inference_remote(instance_pose_data, pose_request_url, pose_model_name, pose_queue=None, orig_h=256,
+                          orig_w=456, short_side=480):
+    w, h = mmcv.rescale_size((orig_w, orig_h), (short_side, np.Inf))
+    openPose_to_poseNet = np.array([0, 15, 14, 17, 16, 5, 2, 6, 3, 7, 4, 11, 8, 12, 9, 13, 10])
+    num_frame = len(instance_pose_data)
+    if num_frame == 0:
+        if pose_queue is not None:
+            pose_queue.put('No Pose Info')
+            return None
+        return pd.DataFrame(columns=['label', 0]).set_index('label')
+
+    num_person = 1  # todo: fixed for time being, but need to be dynamic
+    num_keypoint = 17
+    keypoint = np.zeros((num_person, num_frame, num_keypoint, 2),
+                        dtype=np.float16)
+    keypoint_score = np.zeros((num_person, num_frame, num_keypoint),
+                              dtype=np.float16)
+    for i, (ts, pose_data) in enumerate(instance_pose_data):
+        keypoint[0, i] = pose_data[0, openPose_to_poseNet, :2]
+        keypoint_score[0, i] = pose_data[0, openPose_to_poseNet, 2]
+
+    start_time = time.time()
+    request_dict = {
+        'keypoints': base64.encodebytes(pickle.dumps(keypoint)).decode(),
+        'keypoints_score': base64.encodebytes(pickle.dumps(keypoint_score)).decode(),
+        'pose_model_name': pose_model_name
+    }
+    headers = {'Content-type': 'application/json', 'Accept': 'text/plain'}
+    response = requests.post(pose_request_url, data=json.dumps(request_dict), headers=headers)
+    response_dict = json.loads(response.text)
+    pose_activity = f"\n{pose_model_name} {response_dict['pose_activity']}"
+    inf_time = time.time() - start_time
+    if pose_queue is not None:
+        pose_queue.put((pose_model_name, pose_activity))
+        # pose_queue.put(str(round(inf_time,3)))
+    return None
 
 def pose_inference_server(keypoints, keypoints_score, posec3d_model, posec3d_label_map, orig_h=256, orig_w=456, short_side=480):
     w, h = mmcv.rescale_size((orig_w, orig_h), (short_side, np.Inf))
